@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/Custom_Ecat_App.dir/code/EthercatManager.c.o CMakeFiles/Custom_Ecat_App.dir/code/main.c.o -o Custom_Ecat_App  -lecat_api -lpthread -lm 
