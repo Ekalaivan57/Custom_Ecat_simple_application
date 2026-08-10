@@ -1,0 +1,15 @@
+# Ignore build output directories
+build/
+bin/
+out/
+
+# Ignore compiled objects and executables
+*.o
+*.so
+*.a
+Custom_Ecat_App
+
+# Ignore temporary editor files
+*.swp
+*~
+.DS_Store
