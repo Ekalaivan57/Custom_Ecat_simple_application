@@ -1,10 +1,3 @@
-/****************=============================================================
- *
- * ERL Spectra EtherCAT Custom Application - Main Entry Point
- * File: main.c
- *
- *=============================================================================*/
-
 #include <stdio.h>
 #include <signal.h>
 #include "EthercatManager.h"
