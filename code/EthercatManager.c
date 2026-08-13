@@ -1,239 +1,180 @@
 #include "EthercatManager.h"
 #include "define.h"
-#include <ecat_api.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
-#include <math.h>
 
+/* Global Handles */
+ecat_master_t g_master = NULL;
+ecat_domain_t g_domain = NULL;
 
-// Notes -----> in this g_ ---> global, p_--> pointer, s_----> static,m_ ---> member 
-/* Global Master & Domain Handles */
-static ecat_master_t g_master = NULL;
-static ecat_domain_t g_domain = NULL;
+ecat_slave_t  g_slave_ek1100 = NULL;
+ecat_slave_t  g_slave_el5101 = NULL;
+ecat_slave_t  g_slave_el5072 = NULL;
+ecat_slave_t  g_slave_el4008 = NULL;
+ecat_slave_t  g_slave_el2004 = NULL;
 
-/* Slave Handles */
-static ecat_slave_t g_el5101 = NULL;
-static ecat_slave_t g_el5072 = NULL;
-static ecat_slave_t g_el4008 = NULL;
-static ecat_slave_t g_el2004 = NULL;
+ecat_pdo_t    g_pdo_el5101_val = NULL;
 
-/* PDO Accessor Handles */
-static ecat_pdo_t g_pdo_encoder   = NULL;
-static ecat_pdo_t g_pdo_lvdt_cmd  = NULL;
-static ecat_pdo_t g_pdo_lvdt_val  = NULL;
-static ecat_pdo_t g_pdo_lvdt_pos  = NULL;
-static ecat_pdo_t g_pdo_ao[8]     = {NULL};
-static ecat_pdo_t g_pdo_do[4]     = {NULL};
+ecat_pdo_t    g_pdo_el5072_cmd = NULL;
+ecat_pdo_t    g_pdo_el5072_val = NULL;
+ecat_pdo_t    g_pdo_el5072_pos = NULL;
 
-/* Telemetry & Calibration Variables */
-static uint32_t g_cycle_count = 0;
-static double   g_elapsed_time_ms = 0.0;
-static int32_t  g_lvdt_raw_val = 0;
-static int32_t  g_lvdt_homing_pos = LVDT_HOMING_OFFSET_DEFAULT;
-static uint16_t g_encoder_val = 0;
-static double   g_ao_volts[8] = {8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 10.0, 10.0};
-static bool     g_do_states[4] = {true, false, true, false};
+ecat_pdo_t    g_pdo_el4008_ao[8] = {NULL};
 
-int init_ethercat(void)
+ecat_pdo_t    g_pdo_el2004_do[4] = {NULL};
+
+/* Calibrated zero offset for LVDT */
+static int32_t g_lvdt_zero = (int32_t)LVDT_HOMING_OFFSET;
+
+bool init_ethercat(void)
 {
-    printf(" ERL Spectra EtherCAT Platform - EthercatManager Initializing...\n");
+    printf("===================================================================\n");
+    printf(" ERL Spectra EtherCAT Application Initializing\n");
+    printf(" Target Slaves: EK1100, EL5101, EL5072, EL4008, EL2004\n");
+    printf("===================================================================\n\n");
 
-    /* 1. Request Master 0 */
+    /* Step 1: Request Master Index 0 */
     g_master = ecat_req_master(0);
-    if (!g_master)
-    {
-        fprintf(stderr, "[ecat_Error] Failed to acquire EtherCAT Master 0.\n");
-        return -1;
+    if (!g_master) {
+        fprintf(stderr, "[ERROR] Failed to request EtherCAT Master index 0.\n");
+        return false;
     }
 
-    /* 2. Create Process Data Domain */
+    /* Step 2: Create Process Data Domain */
     g_domain = ecat_create_domain(g_master);
-    if (!g_domain)
-    {
-        fprintf(stderr, "[ecat_Error] Failed to create Process Data Domain.\n");
-        return -1;
+    if (!g_domain) {
+        fprintf(stderr, "[ERROR] Failed to create EtherCAT domain.\n");
+        return false;
     }
 
-    /* 3. Configure Connected Slaves */
-    ecat_slave_config(g_master, 0, POS_EK1100, BECKHOFF_VENDOR_ID, PRODUCT_EK1100);
-    g_el5101 = ecat_slave_config(g_master, 0, POS_EL5101, BECKHOFF_VENDOR_ID, PRODUCT_EL5101);
-    g_el5072 = ecat_slave_config(g_master, 0, POS_EL5072, BECKHOFF_VENDOR_ID, PRODUCT_EL5072);
-    g_el4008 = ecat_slave_config(g_master, 0, POS_EL4008, BECKHOFF_VENDOR_ID, PRODUCT_EL4008);
-    g_el2004 = ecat_slave_config(g_master, 0, POS_EL2004, BECKHOFF_VENDOR_ID, PRODUCT_EL2004);
+    /* Step 3: Explicit Slave Configurations */
+    printf("[CONFIG] Configuring bus slaves...\n");
+    g_slave_ek1100 = ecat_slave_config(g_master, EK1100_ALIAS, EK1100_POS, BECKHOFF_VENDOR_ID, EK1100_PRODUCT);
+    g_slave_el5101 = ecat_slave_config(g_master, EL5101_ALIAS, EL5101_POS, BECKHOFF_VENDOR_ID, EL5101_PRODUCT);
+    g_slave_el5072 = ecat_slave_config(g_master, EL5072_ALIAS, EL5072_POS, BECKHOFF_VENDOR_ID, EL5072_PRODUCT);
+    g_slave_el4008 = ecat_slave_config(g_master, EL4008_ALIAS, EL4008_POS, BECKHOFF_VENDOR_ID, EL4008_PRODUCT);
+    g_slave_el2004 = ecat_slave_config(g_master, EL2004_ALIAS, EL2004_POS, BECKHOFF_VENDOR_ID, EL2004_PRODUCT);
 
-    if (!g_el5101 || !g_el5072 || !g_el4008 || !g_el2004)
-    {
-        fprintf(stderr, "[ecat_Error] One or more slave configurations failed.\n");
-        return -1;
+    if (!g_slave_ek1100 || !g_slave_el5101 || !g_slave_el5072 || !g_slave_el4008 || !g_slave_el2004) {
+        fprintf(stderr, "[ERROR] Failed to configure one or more slaves on the bus.\n");
+        return false;
     }
 
-    /* 4. Register PDO Channels */
-    printf("[ecat_Info] Registering Slave PDO Entries...\n");
+    /* Step 4: Register PDO Entries */
+    printf("[PDO-REG] Registering Slave PDO Entries...\n");
 
-    // EL5101 Encoder Counter (0x6000:02, 16-bit)
-    g_pdo_encoder = ecat_pdo_reg(g_el5101, PDO_EL5101_VALUE_INDEX, PDO_EL5101_VALUE_SUB, 16);
+    // Position 1: EL5101 Incremental Encoder PDO
+    g_pdo_el5101_val = ecat_pdo_reg(g_slave_el5101, 0x6000, 0x02, 16);
 
-    // EL5072 LVDT Outputs (Required for OP state transition) & Inputs
-    g_pdo_lvdt_cmd = ecat_pdo_reg(g_el5072, PDO_EL5072_SET_CMD_INDEX, PDO_EL5072_SET_CMD_SUB, 1);
-    g_pdo_lvdt_val = ecat_pdo_reg(g_el5072, PDO_EL5072_SET_VAL_INDEX, PDO_EL5072_SET_VAL_SUB, 32);
-    g_pdo_lvdt_pos = ecat_pdo_reg(g_el5072, PDO_EL5072_POS_CH1_INDEX, PDO_EL5072_POS_CH1_SUB, 32);
+    // Position 2: EL5072 LVDT PDOs
+    g_pdo_el5072_cmd = ecat_pdo_reg(g_slave_el5072, 0x7000, 0x01, 1);
+    g_pdo_el5072_val = ecat_pdo_reg(g_slave_el5072, 0x7000, 0x11, 32);
+    g_pdo_el5072_pos = ecat_pdo_reg(g_slave_el5072, 0x6001, 0x01, 32);
 
-    // EL4008 8-Channel Analog Output (0-10V, 16-bit each)
-    g_pdo_ao[0] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO1_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[1] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO2_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[2] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO3_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[3] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO4_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[4] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO5_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[5] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO6_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[6] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO7_INDEX, PDO_EL4008_AO_SUB, 16);
-    g_pdo_ao[7] = ecat_pdo_reg(g_el4008, PDO_EL4008_AO8_INDEX, PDO_EL4008_AO_SUB, 16);
-
-    // EL2004 4-Channel Digital Output (24V, 1-bit each)
-    g_pdo_do[0] = ecat_pdo_reg(g_el2004, PDO_EL2004_DO1_INDEX, PDO_EL2004_DO_SUB, 1);
-    g_pdo_do[1] = ecat_pdo_reg(g_el2004, PDO_EL2004_DO2_INDEX, PDO_EL2004_DO_SUB, 1);
-    g_pdo_do[2] = ecat_pdo_reg(g_el2004, PDO_EL2004_DO3_INDEX, PDO_EL2004_DO_SUB, 1);
-    g_pdo_do[3] = ecat_pdo_reg(g_el2004, PDO_EL2004_DO4_INDEX, PDO_EL2004_DO_SUB, 1);
-
-    if (!g_pdo_encoder || !g_pdo_lvdt_pos || !g_pdo_ao[0] || !g_pdo_do[0])
-    {
-        fprintf(stderr, "[ecat_Error] PDO Registration failed.\n");
-        return -1;
+    // Position 3: EL4008 8-Ch Analog Output (0-10V) PDOs
+    for (int ch = 0; ch < 8; ch++) {
+        uint16_t index = 0x7000 + (ch * 0x10);
+        g_pdo_el4008_ao[ch] = ecat_pdo_reg(g_slave_el4008, index, 0x01, 16);
     }
 
-    /* 5. Activate Master */
-    if (ecat_activate(g_master) < 0)
-    {
-        fprintf(stderr, "[ecat_Error] Master activation failed.\n");
-        return -1;
+    // Position 4: EL2004 4-Ch Digital Output (24V) PDOs
+    g_pdo_el2004_do[0] = ecat_pdo_reg(g_slave_el2004, 0x7000, 0x01, 1);
+    g_pdo_el2004_do[1] = ecat_pdo_reg(g_slave_el2004, 0x7010, 0x01, 1);
+    g_pdo_el2004_do[2] = ecat_pdo_reg(g_slave_el2004, 0x7020, 0x01, 1);
+    g_pdo_el2004_do[3] = ecat_pdo_reg(g_slave_el2004, 0x7030, 0x01, 1);
+
+    /* Step 5: Master Activation */
+    int act_ret = ecat_activate(g_master);
+    if (act_ret < 0) {
+        fprintf(stderr, "[ERROR] Master activation failed.\n");
+        return false;
     }
 
-    printf("[ecat_Success] EtherCAT Master Activated! Real-time communication active.\n\n");
-    return 0;
+    printf("[SUCCESS] Application Initialized! Real-time EtherCAT communication active.\n\n");
+    return true;
 }
 
-void recv_domain(void)
+void LVDT_Zero_Set(int val)
 {
-    if (g_master) 
-    {
-        ecat_recv(g_master);
-    }
-}
-
-void send_domain(void)
-{
-    if (g_master)
-    {
-        ecat_send(g_master);
-    }
+    g_lvdt_zero = val;
+    printf("[CALIBRATION] Zero Homing Offset set to: %d counts\n", g_lvdt_zero);
 }
 
 float getLVDTpos(void)
 {
-    int32_t calibrated_counts = g_lvdt_raw_val - g_lvdt_homing_pos;
+    if (!g_pdo_el5072_pos) return 0.0f;
+    int32_t raw_counts = ecat_rd_s32(g_pdo_el5072_pos);
+    int32_t calibrated_counts = raw_counts - g_lvdt_zero;
     return (float)(calibrated_counts * LVDT_GAIN_SCALE);
 }
 
-int getLVDT(void)
+void Ethercat_Run(bool *running)
 {
-    return g_lvdt_raw_val;
-}
+    uint32_t cycle_count = 0;
+    bool ch1_do_state = false;
+    bool ch2_do_state = false;
+    bool ch3_do_state = true;
+    bool ch4_do_state = false;
 
-uint16_t get_encoder_val(void)
-{
-    return g_encoder_val;
-}
+    /* Target Analog Output Voltage Variable (Change this anytime!) */
+    float target_ao_voltage = 5.0f; 
 
+    while (*running) {
+        // Step 1: Receive Ethernet frames
+        ecat_recv(g_master);
 
-void set_analog_output_volts(uint8_t channel, double volts)
-{
-    if (channel < 8) {
-        g_ao_volts[channel] = volts;
-    }
-}
+        // Step 2: Read Encoder & LVDT Sensors
+        uint16_t encoder_counts = g_pdo_el5101_val ? ecat_rd_u16(g_pdo_el5101_val) : 0;
+        int32_t  raw_lvdt       = g_pdo_el5072_pos ? ecat_rd_s32(g_pdo_el5072_pos) : 0;
+        float    displacement_mm = getLVDTpos();
 
-void set_digital_output(uint8_t channel, bool state)
-{
-    if (channel < 4) {
-        g_do_states[channel] = state;
-    }
-}
-
-void LVDT_Zero_Set(void)
-{
-    g_lvdt_homing_pos = g_lvdt_raw_val;
-    printf("[ecat_Info] LVDT Homing Zero set to: %d\n", g_lvdt_homing_pos);
-}
-
-void LOADCELL_Zero_set(void)
-{
-    printf("[ecat_Info] Load Cell Zero set.\n");
-}
-
-void El3356_tare(void)
-{
-    printf("[ecat_Info] EL3356 Tare procedure complete.\n");
-}
-
-bool Ethercat_Run(void)
-{
-    /* 1. Receive Ethernet frame */
-    recv_domain();
-
-    /* 2. Read Sensors */
-    g_encoder_val  = ecat_rd_u16(g_pdo_encoder);
-    g_lvdt_raw_val = ecat_rd_s32(g_pdo_lvdt_pos);
-
-    /* 3. Write Analog Outputs (EL4008 8 Channels) */
-    for (int ch = 0; ch < 8; ch++) {
-        if (g_pdo_ao[ch]) {
-            int16_t dac_raw = V_to_raw(g_ao_volts[ch]);
-            ecat_wr_u16(g_pdo_ao[ch], (uint16_t)dac_raw);
+        // Step 3: Command Digital Outputs
+        if (cycle_count % 500 == 0) {
+            ch1_do_state = !ch1_do_state;
         }
-    }
 
-    /* 4. Write Digital Outputs (EL2004 4 Channels) */
-    for (int ch = 0; ch < 4; ch++) {
-        if (g_pdo_do[ch]) {
-            ecat_wr_bit(g_pdo_do[ch], g_do_states[ch]);
-        }
-    }
+        if (g_pdo_el2004_do[0]) ecat_wr_bit(g_pdo_el2004_do[0], ch1_do_state);
+        if (g_pdo_el2004_do[1]) ecat_wr_bit(g_pdo_el2004_do[1], ch2_do_state);
+        if (g_pdo_el2004_do[2]) ecat_wr_bit(g_pdo_el2004_do[2], ch3_do_state);
+        if (g_pdo_el2004_do[3]) ecat_wr_bit(g_pdo_el2004_do[3], ch4_do_state);
 
-    /* 5. Transmit Ethernet frame */
-    send_domain();
-
-    /* 6. Formatted Telemetry Line Output */
-    if (g_cycle_count % 100 == 0)
-    {
-        printf("Cyclic time (ms): %7.1f | Cycle count: %7u | LVDT Value: %10d | Analog output value: %5.2f V | Encoder value: %5u | Digital output Value: CH1=%s CH2=%s CH3=%s CH4=%s\n", g_elapsed_time_ms, g_cycle_count,g_lvdt_raw_val, g_ao_volts[0], g_encoder_val, g_do_states[0] ? "ON " : "OFF", g_do_states[1] ? "ON " : "OFF",g_do_states[2] ? "ON " : "OFF", g_do_states[3] ? "ON " : "OFF");
-    }
-
-    /* Timing Update */
-    usleep(CYCLE_PERIOD_US);
-    g_cycle_count++;
-    g_elapsed_time_ms += (CYCLE_PERIOD_US / 1000.0);
-
-    return true;
-}
-
-void Ethercat_Cleanup(void)
-{
-    printf("\n[ecat_Info] Safely shutting down outputs and releasing master...\n");
-
-    if (g_master) {
-        recv_domain();
+        // Step 4: Write EL4008 Analog Outputs (Dynamic DAC voltage scaling)
+        uint16_t max_voltage_raw = V_to_raw(target_ao_voltage);
         for (int ch = 0; ch < 8; ch++) {
-            if (g_pdo_ao[ch]) ecat_wr_u16(g_pdo_ao[ch], 0);
+            if (g_pdo_el4008_ao[ch]) {
+                ecat_wr_u16(g_pdo_el4008_ao[ch], max_voltage_raw);
+            }
         }
-        for (int ch = 0; ch < 4; ch++) {
-            if (g_pdo_do[ch]) ecat_wr_bit(g_pdo_do[ch], false);
-        }
-        send_domain();
-        usleep(2000);
 
-        ecat_rel_master(g_master);
-        g_master = NULL;
+        // Dynamically compute the exact output voltage produced by the channel
+        float actual_produced_voltage = (float)max_voltage_raw / 3276.7f;
+
+        // Step 5: Write EL5072 SM2 Outputs
+        if (g_pdo_el5072_cmd) ecat_wr_bit(g_pdo_el5072_cmd, false);
+        if (g_pdo_el5072_val) ecat_wr_s32(g_pdo_el5072_val, 0);
+
+        // Step 6: Send Ethernet frames
+        ecat_send(g_master);
+
+        // Telemetry Printout every 100 ms (DYNAMICALLY PRINT PRODUCED VOLTAGE & DIGITAL STATES)
+        if (cycle_count % 100 == 0) {
+            printf("Cyclic time (ms): %7.1f | Cycle count: %8u | LVDT Value: %9d (%6.3f mm) | Analog output value: %5.2f V | Encoder value: %5u | Digital output Value: CH1=%s CH2=%s CH3=%s CH4=%s\n",
+                   1.0f,
+                   cycle_count,
+                   raw_lvdt,
+                   displacement_mm,
+                   actual_produced_voltage,
+                   encoder_counts,
+                   ch1_do_state ? "ON " : "OFF",
+                   ch2_do_state ? "ON " : "OFF",
+                   ch3_do_state ? "ON " : "OFF",
+                   ch4_do_state ? "ON " : "OFF");
+        }
+
+        usleep(1000); // 1 ms cycle delay
+        cycle_count++;
     }
 
-    printf("[ecat_Info] Cleanup finished successfully.\n");
+    printf("[CLEANUP] Application exiting. Releasing EtherCAT Master...\n");
+    ecat_rel_master(g_master);
 }
